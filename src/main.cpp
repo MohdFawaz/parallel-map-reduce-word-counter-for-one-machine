@@ -1,12 +1,13 @@
 /*
-mapping phase
-Steps: 
-Read & Store All Lines (Loads the entire text file into memory as a vector<string>.)
-Determine Thread Count & Chunk Size (We split the total number of lines evenly, rounding up)
-Spawn One Thread per Chunk (Each thread runs countWordsInChunk(...) on its own slice of lines)
-Map Phase: Local Counting
+adding the Shuffle & Reduce step by merging all per-thread maps into one global map. Since we do this after joining threads in the main thread, no locking is needed here
+Steps:
+We created an empty globalCounts.
+For each thread’s localMap, we added its entries into globalCounts.
+So far this loop runs in one thread, there’s no need for mutexes UNTIL NOW.
+Only one thread does that merge step—the main thread, after all worker threads have joined. We intentionally keep it single-threaded so there’s no locking needed during the merge.
 */
 
+// this code does a single‐threaded merge over all per‐thread maps (for localMap in perThreadCounts … globalCounts[k] += v)
 
 
 #include <iostream>
@@ -96,6 +97,21 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "-----------------\n";
     }
+
+    // 5. Merge per-thread counts into a single global map
+    std::unordered_map<std::string, std::size_t> globalCounts;
+    for (const auto& localMap : perThreadCounts) {
+        for (const auto& kv : localMap) {
+            globalCounts[kv.first] += kv.second;
+        }
+    }
+
+    // 6. Print final counts (or top-N)
+    std::cout << "\n=== Final Word Counts ===\n";
+    for (const auto& kv : globalCounts) {
+        std::cout << kv.first << " -> " << kv.second << "\n";
+    }
+
 
     return 0;
 }
