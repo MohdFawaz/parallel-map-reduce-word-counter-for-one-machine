@@ -1,5 +1,9 @@
-/* This is the batch implementation, we removed the merge inside the batch loop as it had only 1 thread, and we left the last merge original step at the end which has multiple threads.
-The code is streaming in fixed‐size batches which can be adjusted, so we are not loading all 700 MB of the input file into RAM at once
+/*
+Previously we had problems: 
+The remaining segfault/stall is because of our globalCounts keeps growing without any reserve(), causing repeated 
+re-hashes and ballooning memory.
+
+Now we use reserve and is adjustable, starting the test with 1 million
 */
 
 // src/main.cpp
@@ -66,7 +70,7 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
-    const size_t BATCH_SIZE = 100000;                // tune as needed
+    const size_t BATCH_SIZE = 10000;                // tune down to avoid OOM
     std::ifstream inputFile(argv[1]);
     if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
@@ -76,9 +80,30 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> batch;
     batch.reserve(BATCH_SIZE);
     std::string line;
-    std::vector<std::thread> mapWorkers;
-    // one local map vector reused per batch
+
+    // prepare per-thread local maps
     std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
+    // reserve some space to reduce rehashing
+    for (auto& m : perThreadCounts) m.reserve(BATCH_SIZE / 10);
+
+    // prepare globalCounts + merge infrastructure
+    std::unordered_map<std::string, std::size_t> globalCounts;
+    globalCounts.reserve(1'000'000);               // estimate unique words
+    unsigned int stripeCount = threadCount;
+    std::vector<std::mutex> stripeLocks(stripeCount);
+
+    // worker lambda does the merging
+    auto mergeWorker = [&](unsigned int workerId) {
+        for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
+            if (i % threadCount != workerId) continue;
+            for (const auto& kv : perThreadCounts[i]) {
+                std::size_t h = std::hash<std::string>{}(kv.first);
+                unsigned int idx = h % stripeCount;
+                std::lock_guard<std::mutex> guard(stripeLocks[idx]);
+                globalCounts[kv.first] += kv.second;
+            }
+        }
+    };
 
     while (std::getline(inputFile, line)) {
         batch.push_back(std::move(line));
@@ -87,10 +112,15 @@ int main(int argc, char* argv[]) {
             std::size_t totalLines     = batch.size();
             std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
 
-            // reset per-thread maps and workers
-            for (auto &m : perThreadCounts) m.clear();
-            mapWorkers.clear();
+            // reset per-thread maps
+            for (auto& m : perThreadCounts) {
+                m.clear();
+                m.reserve(linesPerThread / 10);
+            }
 
+            // launch map threads
+            std::vector<std::thread> mapWorkers;
+            mapWorkers.reserve(threadCount);
             for (unsigned int t = 0; t < threadCount; ++t) {
                 std::size_t start = t * linesPerThread;
                 std::size_t end   = std::min(start + linesPerThread, totalLines);
@@ -104,6 +134,14 @@ int main(int argc, char* argv[]) {
                 );
             }
             for (auto& w : mapWorkers) w.join();
+
+            // 2. Parallel‐merge this batch into globalCounts
+            std::vector<std::thread> mergeWorkers;
+            mergeWorkers.reserve(threadCount);
+            for (unsigned int w = 0; w < threadCount; ++w)
+                mergeWorkers.emplace_back(mergeWorker, w);
+            for (auto& w : mergeWorkers) w.join();
+
             batch.clear();  // free memory before next batch
         }
     }
@@ -113,9 +151,12 @@ int main(int argc, char* argv[]) {
         std::size_t totalLines     = batch.size();
         std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
 
-        for (auto &m : perThreadCounts) m.clear();
-        mapWorkers.clear();
-
+        for (auto& m : perThreadCounts) {
+            m.clear();
+            m.reserve(linesPerThread / 10);
+        }
+        std::vector<std::thread> mapWorkers;
+        mapWorkers.reserve(threadCount);
         for (unsigned int t = 0; t < threadCount; ++t) {
             std::size_t start = t * linesPerThread;
             std::size_t end   = std::min(start + linesPerThread, totalLines);
@@ -129,6 +170,12 @@ int main(int argc, char* argv[]) {
             );
         }
         for (auto& w : mapWorkers) w.join();
+
+        std::vector<std::thread> mergeWorkers;
+        mergeWorkers.reserve(threadCount);
+        for (unsigned int w = 0; w < threadCount; ++w)
+            mergeWorkers.emplace_back(mergeWorker, w);
+        for (auto& w : mergeWorkers) w.join();
     }
 
     inputFile.close();
@@ -136,64 +183,23 @@ int main(int argc, char* argv[]) {
     auto mapEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
-    // 5. Parallel Merge (Shuffle & Reduce) and time it
-    // ————————————————————————————————————————————————————————
-    std::unordered_map<std::string, std::size_t> globalCounts;
-    unsigned int stripeCount = threadCount;
-    std::vector<std::mutex> stripeLocks(stripeCount);
-
-    auto mergeStart = std::chrono::high_resolution_clock::now();
-    // Worker lambda does the merging
-    auto mergeWorker = [&](unsigned int workerId) {
-        for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
-            if (i % threadCount != workerId) continue;
-            for (const auto& kv : perThreadCounts[i]) {
-                const std::string& word = kv.first;
-                std::size_t cnt         = kv.second;
-                // Pick a stripe by hashing the word
-                std::size_t h = std::hash<std::string>{}(word);
-                unsigned int stripeIndex = h % stripeCount;
-                // Lock just that stripe, update global count
-                std::lock_guard<std::mutex> guard(stripeLocks[stripeIndex]);
-                globalCounts[word] += cnt;
-            }
-        }
-    };
-
-    // Launch merge threads
-    std::vector<std::thread> mergeWorkers;
-    for (unsigned int w = 0; w < threadCount; ++w) {
-        mergeWorkers.emplace_back(mergeWorker, w);
-    }
-    for (auto& w : mergeWorkers) w.join();
-    auto mergeEnd = std::chrono::high_resolution_clock::now();
-
-    // ————————————————————————————————————————————————————————
     // 6. Sort alphabetically and print results
     // ————————————————————————————————————————————————————————
     std::vector<std::pair<std::string, std::size_t>> sortedWords;
     sortedWords.reserve(globalCounts.size());
-    for (const auto& kv : globalCounts) {
+    for (const auto& kv : globalCounts)
         sortedWords.emplace_back(kv.first, kv.second);
-    }
-    std::sort(
-        sortedWords.begin(),
-        sortedWords.end(),
-        [](auto const& a, auto const& b) {
-            return a.first < b.first;
-        }
-    );
+    std::sort(sortedWords.begin(), sortedWords.end(),
+        [](auto const& a, auto const& b){ return a.first < b.first; });
 
-    // saving the words count in an output file
     std::ofstream outputFile("output.txt");
     if (!outputFile) {
         std::cerr << "Error: could not open output.txt for writing\n";
         return 1;
     }
     outputFile << "=== Final Word Counts (A → Z) ===\n";
-    for (auto const& p : sortedWords) {
+    for (auto const& p : sortedWords)
         outputFile << p.first << " -> " << p.second << "\n";
-    }
     outputFile.close();
 
     // ————————————————————————————————————————————————————————
@@ -201,7 +207,7 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     auto totalEnd = std::chrono::high_resolution_clock::now();
     auto mapUs    = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd   - mapStart).count();
-    auto mergeUs  = std::chrono::duration_cast<std::chrono::microseconds>(mergeEnd - mergeStart).count();
+    auto mergeUs  = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - mapStart).count(); // merge included
     auto totUs    = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
 
     std::cout << "\n--- Timing (µs) ---\n"
