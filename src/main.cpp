@@ -1,9 +1,6 @@
-/*
-Saving the output of words count in a file instead of printing to the terminal
-Calculating the clock in microseconds  instead of milliseconds
+/* This is the batch implementation, we removed the merge inside the batch loop as it had only 1 thread, and we left the last merge original step at the end which has multiple threads.
+The code is streaming in fixed‐size batches which can be adjusted, so we are not loading all 700 MB of the input file into RAM at once
 */
- 
-
 
 // src/main.cpp
 
@@ -58,74 +55,98 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // decide number of threads for both map and merge
+    unsigned int threadCount = std::thread::hardware_concurrency();
+    if (threadCount == 0) threadCount = 1;
+    // start total timer
+    auto totalStart = std::chrono::high_resolution_clock::now();
+    // start map timer
+    auto mapStart = std::chrono::high_resolution_clock::now();
+
     // ————————————————————————————————————————————————————————
-    // 2. Read entire file into memory
+    // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
+    const size_t BATCH_SIZE = 100000;                // tune as needed
     std::ifstream inputFile(argv[1]);
-    if (!inputFile.is_open()) {
+    if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
         return 1;
     }
-    std::vector<std::string> lines;
-    for (std::string line; std::getline(inputFile, line); ) {
-        lines.push_back(std::move(line));
-    }
-    inputFile.close();
 
-    // ————————————————————————————————————————————————————————
-    // 3. Decide number of threads and chunk size
-    // ————————————————————————————————————————————————————————
-    unsigned int threadCount = std::thread::hardware_concurrency();
-    if (threadCount == 0) threadCount = 1;
-
-    std::size_t totalLines     = lines.size();
-    std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
-
-    // ————————————————————————————————————————————————————————
-    // Start total timer
-    // ————————————————————————————————————————————————————————
-    auto totalStart = std::chrono::high_resolution_clock::now();
-
-    // ————————————————————————————————————————————————————————
-    // 4. Launch map threads and time the Map phase
-    // ————————————————————————————————————————————————————————
-    std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
+    std::vector<std::string> batch;
+    batch.reserve(BATCH_SIZE);
+    std::string line;
     std::vector<std::thread> mapWorkers;
+    // one local map vector reused per batch
+    std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
 
-    auto mapStart = std::chrono::high_resolution_clock::now();
-    for (unsigned int t = 0; t < threadCount; ++t) {
-        std::size_t start = t * linesPerThread;
-        std::size_t end   = std::min(start + linesPerThread, totalLines);
-        if (start >= end) break;
-        mapWorkers.emplace_back(
-            countWordsInChunk,
-            std::cref(lines),
-            start,
-            end,
-            std::ref(perThreadCounts[t])
-        );
+    while (std::getline(inputFile, line)) {
+        batch.push_back(std::move(line));
+        if (batch.size() == BATCH_SIZE) {
+            // 1. Spawn map threads on this batch
+            std::size_t totalLines     = batch.size();
+            std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
+
+            // reset per-thread maps and workers
+            for (auto &m : perThreadCounts) m.clear();
+            mapWorkers.clear();
+
+            for (unsigned int t = 0; t < threadCount; ++t) {
+                std::size_t start = t * linesPerThread;
+                std::size_t end   = std::min(start + linesPerThread, totalLines);
+                if (start >= end) break;
+                mapWorkers.emplace_back(
+                    countWordsInChunk,
+                    std::cref(batch),
+                    start,
+                    end,
+                    std::ref(perThreadCounts[t])
+                );
+            }
+            for (auto& w : mapWorkers) w.join();
+            batch.clear();  // free memory before next batch
+        }
     }
-    // Wait for map threads to finish
-    for (auto& w : mapWorkers) {
-        w.join();
+
+    // Process any leftover lines
+    if (!batch.empty()) {
+        std::size_t totalLines     = batch.size();
+        std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
+
+        for (auto &m : perThreadCounts) m.clear();
+        mapWorkers.clear();
+
+        for (unsigned int t = 0; t < threadCount; ++t) {
+            std::size_t start = t * linesPerThread;
+            std::size_t end   = std::min(start + linesPerThread, totalLines);
+            if (start >= end) break;
+            mapWorkers.emplace_back(
+                countWordsInChunk,
+                std::cref(batch),
+                start,
+                end,
+                std::ref(perThreadCounts[t])
+            );
+        }
+        for (auto& w : mapWorkers) w.join();
     }
+
+    inputFile.close();
+    // end map timer
     auto mapEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
     // 5. Parallel Merge (Shuffle & Reduce) and time it
     // ————————————————————————————————————————————————————————
     std::unordered_map<std::string, std::size_t> globalCounts;
-    unsigned int mergeThreadCount = threadCount;
-    unsigned int stripeCount      = mergeThreadCount;
-
-    // Prepare fine‐grained locks (one per stripe)
+    unsigned int stripeCount = threadCount;
     std::vector<std::mutex> stripeLocks(stripeCount);
 
     auto mergeStart = std::chrono::high_resolution_clock::now();
     // Worker lambda does the merging
     auto mergeWorker = [&](unsigned int workerId) {
         for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
-            if (i % mergeThreadCount != workerId) continue;
+            if (i % threadCount != workerId) continue;
             for (const auto& kv : perThreadCounts[i]) {
                 const std::string& word = kv.first;
                 std::size_t cnt         = kv.second;
@@ -141,12 +162,10 @@ int main(int argc, char* argv[]) {
 
     // Launch merge threads
     std::vector<std::thread> mergeWorkers;
-    for (unsigned int w = 0; w < mergeThreadCount; ++w) {
+    for (unsigned int w = 0; w < threadCount; ++w) {
         mergeWorkers.emplace_back(mergeWorker, w);
     }
-    for (auto& w : mergeWorkers) {
-        w.join();
-    }
+    for (auto& w : mergeWorkers) w.join();
     auto mergeEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
@@ -165,9 +184,7 @@ int main(int argc, char* argv[]) {
         }
     );
 
-
-    //saving the words count in an output file
-    // open output file
+    // saving the words count in an output file
     std::ofstream outputFile("output.txt");
     if (!outputFile) {
         std::cerr << "Error: could not open output.txt for writing\n";
@@ -180,17 +197,17 @@ int main(int argc, char* argv[]) {
     outputFile.close();
 
     // ————————————————————————————————————————————————————————
-    // 7. Report timings in milliseconds
+    // 7. Report timings in microseconds
     // ————————————————————————————————————————————————————————
     auto totalEnd = std::chrono::high_resolution_clock::now();
-    auto mapMs   = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd   - mapStart).count();
-    auto mergeMs = std::chrono::duration_cast<std::chrono::microseconds>(mergeEnd - mergeStart).count();
-    auto totMs   = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
+    auto mapUs    = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd   - mapStart).count();
+    auto mergeUs  = std::chrono::duration_cast<std::chrono::microseconds>(mergeEnd - mergeStart).count();
+    auto totUs    = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
 
     std::cout << "\n--- Timing (µs) ---\n"
-              << "Map:   " << mapMs   << "\n"
-              << "Merge: " << mergeMs << "\n"
-              << "Total: " << totMs   << "\n";
+              << "Map:   " << mapUs   << "\n"
+              << "Merge: " << mergeUs << "\n"
+              << "Total: " << totUs   << "\n";
 
     return 0;
 }
