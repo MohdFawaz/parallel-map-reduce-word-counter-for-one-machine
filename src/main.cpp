@@ -1,4 +1,9 @@
-//////Instrumenting our pipeline with wall clock timers and adding comments
+/*
+Saving the output of words count in a file instead of printing to the terminal
+Calculating the clock in microseconds  instead of milliseconds
+*/
+ 
+
 
 // src/main.cpp
 
@@ -160,20 +165,29 @@ int main(int argc, char* argv[]) {
         }
     );
 
-    std::cout << "\n=== Final Word Counts (A → Z) ===\n";
-    for (auto const& p : sortedWords) {
-        std::cout << p.first << " -> " << p.second << "\n";
+
+    //saving the words count in an output file
+    // open output file
+    std::ofstream outputFile("output.txt");
+    if (!outputFile) {
+        std::cerr << "Error: could not open output.txt for writing\n";
+        return 1;
     }
+    outputFile << "=== Final Word Counts (A → Z) ===\n";
+    for (auto const& p : sortedWords) {
+        outputFile << p.first << " -> " << p.second << "\n";
+    }
+    outputFile.close();
 
     // ————————————————————————————————————————————————————————
     // 7. Report timings in milliseconds
     // ————————————————————————————————————————————————————————
     auto totalEnd = std::chrono::high_resolution_clock::now();
-    auto mapMs   = std::chrono::duration_cast<std::chrono::milliseconds>(mapEnd   - mapStart).count();
-    auto mergeMs = std::chrono::duration_cast<std::chrono::milliseconds>(mergeEnd - mergeStart).count();
-    auto totMs   = std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart).count();
+    auto mapMs   = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd   - mapStart).count();
+    auto mergeMs = std::chrono::duration_cast<std::chrono::microseconds>(mergeEnd - mergeStart).count();
+    auto totMs   = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
 
-    std::cout << "\n--- Timing (ms) ---\n"
+    std::cout << "\n--- Timing (µs) ---\n"
               << "Map:   " << mapMs   << "\n"
               << "Merge: " << mergeMs << "\n"
               << "Total: " << totMs   << "\n";
