@@ -1,7 +1,4 @@
-/*
-This code does a parallel shuffle & reduce: N merge threads, 
-each hashes words into “stripes” and locks only that stripe before updating globalCounts.
-*/
+//////Instrumenting our pipeline with wall clock timers and adding comments
 
 // src/main.cpp
 
@@ -15,6 +12,7 @@ each hashes words into “stripes” and locks only that stripe before updating 
 #include <functional>  // for std::hash
 #include <algorithm>   // for std::min, std::sort
 #include <cctype>      // for std::isalnum, std::tolower
+#include <chrono>      // for timing
 
 // ————————————————————————————————————————————————————————
 // 1. Map phase: count words in [startLine, endLine)
@@ -25,18 +23,24 @@ void countWordsInChunk(
     std::size_t endLine,
     std::unordered_map<std::string, std::size_t>& localCounts)
 {
+    // Go through each line in our chunk
     for (std::size_t i = startLine; i < endLine; ++i) {
         const std::string& line = allLines[i];
         std::string word;
+
+        // Build words character by character
         for (char ch : line) {
             if (std::isalnum(static_cast<unsigned char>(ch))) {
+                // Add letter/digit to current word (lowercased)
                 word += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             }
             else if (!word.empty()) {
+                // Non‐alnum ends a word: count it, then clear
                 localCounts[word] += 1;
                 word.clear();
             }
         }
+        // Last word on the line (if any)
         if (!word.empty()) {
             localCounts[word] += 1;
         }
@@ -58,25 +62,32 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::vector<std::string> lines;
-    for (std::string line; std::getline(inputFile, line); )
+    for (std::string line; std::getline(inputFile, line); ) {
         lines.push_back(std::move(line));
+    }
     inputFile.close();
 
     // ————————————————————————————————————————————————————————
-    // 3. Determine thread count & chunk size
+    // 3. Decide number of threads and chunk size
     // ————————————————————————————————————————————————————————
     unsigned int threadCount = std::thread::hardware_concurrency();
     if (threadCount == 0) threadCount = 1;
 
-    std::size_t totalLines    = lines.size();
+    std::size_t totalLines     = lines.size();
     std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
 
     // ————————————————————————————————————————————————————————
-    // 4. Launch map threads
+    // Start total timer
+    // ————————————————————————————————————————————————————————
+    auto totalStart = std::chrono::high_resolution_clock::now();
+
+    // ————————————————————————————————————————————————————————
+    // 4. Launch map threads and time the Map phase
     // ————————————————————————————————————————————————————————
     std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
     std::vector<std::thread> mapWorkers;
 
+    auto mapStart = std::chrono::high_resolution_clock::now();
     for (unsigned int t = 0; t < threadCount; ++t) {
         std::size_t start = t * linesPerThread;
         std::size_t end   = std::min(start + linesPerThread, totalLines);
@@ -89,44 +100,49 @@ int main(int argc, char* argv[]) {
             std::ref(perThreadCounts[t])
         );
     }
-
-    // Wait for all map threads
-    for (auto& w : mapWorkers) w.join();
+    // Wait for map threads to finish
+    for (auto& w : mapWorkers) {
+        w.join();
+    }
+    auto mapEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
-    // 5. Parallel Merge (Shuffle & Reduce)
+    // 5. Parallel Merge (Shuffle & Reduce) and time it
     // ————————————————————————————————————————————————————————
     std::unordered_map<std::string, std::size_t> globalCounts;
     unsigned int mergeThreadCount = threadCount;
     unsigned int stripeCount      = mergeThreadCount;
 
-    // prepare fine-grained locks (one per stripe)
+    // Prepare fine‐grained locks (one per stripe)
     std::vector<std::mutex> stripeLocks(stripeCount);
 
-    // worker lambda for merging
+    auto mergeStart = std::chrono::high_resolution_clock::now();
+    // Worker lambda does the merging
     auto mergeWorker = [&](unsigned int workerId) {
         for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
             if (i % mergeThreadCount != workerId) continue;
             for (const auto& kv : perThreadCounts[i]) {
                 const std::string& word = kv.first;
                 std::size_t cnt         = kv.second;
-                // pick a stripe by hashing the word
+                // Pick a stripe by hashing the word
                 std::size_t h = std::hash<std::string>{}(word);
                 unsigned int stripeIndex = h % stripeCount;
-                // lock only this stripe while updating
+                // Lock just that stripe, update global count
                 std::lock_guard<std::mutex> guard(stripeLocks[stripeIndex]);
                 globalCounts[word] += cnt;
             }
         }
     };
 
-    // launch merge threads
+    // Launch merge threads
     std::vector<std::thread> mergeWorkers;
     for (unsigned int w = 0; w < mergeThreadCount; ++w) {
         mergeWorkers.emplace_back(mergeWorker, w);
     }
-    // wait for all merge threads
-    for (auto& w : mergeWorkers) w.join();
+    for (auto& w : mergeWorkers) {
+        w.join();
+    }
+    auto mergeEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
     // 6. Sort alphabetically and print results
@@ -136,7 +152,6 @@ int main(int argc, char* argv[]) {
     for (const auto& kv : globalCounts) {
         sortedWords.emplace_back(kv.first, kv.second);
     }
-
     std::sort(
         sortedWords.begin(),
         sortedWords.end(),
@@ -149,6 +164,19 @@ int main(int argc, char* argv[]) {
     for (auto const& p : sortedWords) {
         std::cout << p.first << " -> " << p.second << "\n";
     }
+
+    // ————————————————————————————————————————————————————————
+    // 7. Report timings in milliseconds
+    // ————————————————————————————————————————————————————————
+    auto totalEnd = std::chrono::high_resolution_clock::now();
+    auto mapMs   = std::chrono::duration_cast<std::chrono::milliseconds>(mapEnd   - mapStart).count();
+    auto mergeMs = std::chrono::duration_cast<std::chrono::milliseconds>(mergeEnd - mergeStart).count();
+    auto totMs   = std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart).count();
+
+    std::cout << "\n--- Timing (ms) ---\n"
+              << "Map:   " << mapMs   << "\n"
+              << "Merge: " << mergeMs << "\n"
+              << "Total: " << totMs   << "\n";
 
     return 0;
 }
