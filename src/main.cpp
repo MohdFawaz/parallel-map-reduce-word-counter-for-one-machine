@@ -1,15 +1,7 @@
 /*
-New code to deal with Finnish text inputs 
-What this does
-
-Skips digits (0–9) entirely, so you never accumulate numbers.
-
-Keeps UTF-8 bytes (uch ≥ 0x80), so Finnish letters stay inside words.
-
-Allows - inside words, so hyphenated terms stay one token.
-
-Splits on everything else (spaces, , . ; :, digits).
+Further Finnish text processing : only letters (ASCII or Finnish), no hyphens, and no whitespace
 */
+
 
 // src/main.cpp
 
@@ -40,9 +32,10 @@ void countWordsInChunk(
         std::string word;
         for (char ch : line) {
             unsigned char uch = static_cast<unsigned char>(ch);
-            if (uch >= 0x80            // any non‐ASCII byte (Finnish letters in UTF-8)
-                || std::isalpha(uch)   // ASCII letters only (no digits)
-                || ch == '-'           // keep hyphens inside words
+            if ((std::isalpha(uch) || uch >= 0x80)  // only letters (ASCII or Finnish)
+                && ch != '-'                        // no hyphens
+                //&& uch != 0xA0                       // no NBSP
+                && !std::isspace(uch)               // no spaces
             ) {
                 word += ch;
             }
