@@ -1,14 +1,9 @@
 /*
-adding the Shuffle & Reduce step by merging all per-thread maps into one global map. Since we do this after joining threads in the main thread, no locking is needed here
-Steps:
-We created an empty globalCounts.
-For each thread’s localMap, we added its entries into globalCounts.
-So far this loop runs in one thread, there’s no need for mutexes UNTIL NOW.
-Only one thread does that merge step—the main thread, after all worker threads have joined. We intentionally keep it single-threaded so there’s no locking needed during the merge.
+This code does a parallel shuffle & reduce: N merge threads, 
+each hashes words into “stripes” and locks only that stripe before updating globalCounts.
 */
 
-// this code does a single‐threaded merge over all per‐thread maps (for localMap in perThreadCounts … globalCounts[k] += v)
-
+// src/main.cpp
 
 #include <iostream>
 #include <fstream>
@@ -16,29 +11,34 @@ Only one thread does that merge step—the main thread, after all worker threads
 #include <vector>
 #include <thread>
 #include <unordered_map>
-#include <cctype>   // for std::isalnum and std::tolower
-#include <algorithm> // for std::min
+#include <mutex>
+#include <functional>  // for std::hash
+#include <algorithm>   // for std::min, std::sort
+#include <cctype>      // for std::isalnum, std::tolower
 
-// Processes lines [startLine, endLine) and counts words into localCounts
-void countWordsInChunk(const std::vector<std::string>& allLines,
-                       std::size_t startLine,
-                       std::size_t endLine,
-                       std::unordered_map<std::string, std::size_t>& localCounts)
+// ————————————————————————————————————————————————————————
+// 1. Map phase: count words in [startLine, endLine)
+// ————————————————————————————————————————————————————————
+void countWordsInChunk(
+    const std::vector<std::string>& allLines,
+    std::size_t startLine,
+    std::size_t endLine,
+    std::unordered_map<std::string, std::size_t>& localCounts)
 {
-    for (std::size_t lineIndex = startLine; lineIndex < endLine; ++lineIndex) {
-        const std::string& line = allLines[lineIndex];
-        std::string currentWord;
+    for (std::size_t i = startLine; i < endLine; ++i) {
+        const std::string& line = allLines[i];
+        std::string word;
         for (char ch : line) {
             if (std::isalnum(static_cast<unsigned char>(ch))) {
-                currentWord += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                word += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             }
-            else if (!currentWord.empty()) {
-                localCounts[currentWord] += 1;
-                currentWord.clear();
+            else if (!word.empty()) {
+                localCounts[word] += 1;
+                word.clear();
             }
         }
-        if (!currentWord.empty()) {
-            localCounts[currentWord] += 1;
+        if (!word.empty()) {
+            localCounts[word] += 1;
         }
     }
 }
@@ -49,33 +49,39 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 1. Read file into memory
+    // ————————————————————————————————————————————————————————
+    // 2. Read entire file into memory
+    // ————————————————————————————————————————————————————————
     std::ifstream inputFile(argv[1]);
     if (!inputFile.is_open()) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
         return 1;
     }
     std::vector<std::string> lines;
-    std::string line;
-    while (std::getline(inputFile, line)) {
-        lines.push_back(line);
-    }
+    for (std::string line; std::getline(inputFile, line); )
+        lines.push_back(std::move(line));
     inputFile.close();
 
-    // 2. Determine number of threads and chunk size
+    // ————————————————————————————————————————————————————————
+    // 3. Determine thread count & chunk size
+    // ————————————————————————————————————————————————————————
     unsigned int threadCount = std::thread::hardware_concurrency();
     if (threadCount == 0) threadCount = 1;
-    std::size_t totalLines = lines.size();
+
+    std::size_t totalLines    = lines.size();
     std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
 
-    // 3. Prepare per-thread maps and launch threads
+    // ————————————————————————————————————————————————————————
+    // 4. Launch map threads
+    // ————————————————————————————————————————————————————————
     std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
-    std::vector<std::thread> workers;
+    std::vector<std::thread> mapWorkers;
+
     for (unsigned int t = 0; t < threadCount; ++t) {
         std::size_t start = t * linesPerThread;
         std::size_t end   = std::min(start + linesPerThread, totalLines);
         if (start >= end) break;
-        workers.emplace_back(
+        mapWorkers.emplace_back(
             countWordsInChunk,
             std::cref(lines),
             start,
@@ -84,34 +90,65 @@ int main(int argc, char* argv[]) {
         );
     }
 
-    // 4. Wait for all threads to finish
-    for (auto& worker : workers) {
-        worker.join();
-    }
+    // Wait for all map threads
+    for (auto& w : mapWorkers) w.join();
 
-    // Debug: print each thread's local counts
-    for (std::size_t t = 0; t < perThreadCounts.size(); ++t) {
-        std::cout << "Thread " << t << " counted:\n";
-        for (auto& pair : perThreadCounts[t]) {
-            std::cout << "  " << pair.first << " -> " << pair.second << "\n";
-        }
-        std::cout << "-----------------\n";
-    }
-
-    // 5. Merge per-thread counts into a single global map
+    // ————————————————————————————————————————————————————————
+    // 5. Parallel Merge (Shuffle & Reduce)
+    // ————————————————————————————————————————————————————————
     std::unordered_map<std::string, std::size_t> globalCounts;
-    for (const auto& localMap : perThreadCounts) {
-        for (const auto& kv : localMap) {
-            globalCounts[kv.first] += kv.second;
+    unsigned int mergeThreadCount = threadCount;
+    unsigned int stripeCount      = mergeThreadCount;
+
+    // prepare fine-grained locks (one per stripe)
+    std::vector<std::mutex> stripeLocks(stripeCount);
+
+    // worker lambda for merging
+    auto mergeWorker = [&](unsigned int workerId) {
+        for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
+            if (i % mergeThreadCount != workerId) continue;
+            for (const auto& kv : perThreadCounts[i]) {
+                const std::string& word = kv.first;
+                std::size_t cnt         = kv.second;
+                // pick a stripe by hashing the word
+                std::size_t h = std::hash<std::string>{}(word);
+                unsigned int stripeIndex = h % stripeCount;
+                // lock only this stripe while updating
+                std::lock_guard<std::mutex> guard(stripeLocks[stripeIndex]);
+                globalCounts[word] += cnt;
+            }
         }
-    }
+    };
 
-    // 6. Print final counts (or top-N)
-    std::cout << "\n=== Final Word Counts ===\n";
+    // launch merge threads
+    std::vector<std::thread> mergeWorkers;
+    for (unsigned int w = 0; w < mergeThreadCount; ++w) {
+        mergeWorkers.emplace_back(mergeWorker, w);
+    }
+    // wait for all merge threads
+    for (auto& w : mergeWorkers) w.join();
+
+    // ————————————————————————————————————————————————————————
+    // 6. Sort alphabetically and print results
+    // ————————————————————————————————————————————————————————
+    std::vector<std::pair<std::string, std::size_t>> sortedWords;
+    sortedWords.reserve(globalCounts.size());
     for (const auto& kv : globalCounts) {
-        std::cout << kv.first << " -> " << kv.second << "\n";
+        sortedWords.emplace_back(kv.first, kv.second);
     }
 
+    std::sort(
+        sortedWords.begin(),
+        sortedWords.end(),
+        [](auto const& a, auto const& b) {
+            return a.first < b.first;
+        }
+    );
+
+    std::cout << "\n=== Final Word Counts (A → Z) ===\n";
+    for (auto const& p : sortedWords) {
+        std::cout << p.first << " -> " << p.second << "\n";
+    }
 
     return 0;
 }
