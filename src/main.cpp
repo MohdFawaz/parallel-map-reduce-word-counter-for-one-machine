@@ -1,9 +1,14 @@
 /*
-Previously we had problems: 
-The remaining segfault/stall is because of our globalCounts keeps growing without any reserve(), causing repeated 
-re-hashes and ballooning memory.
+New code to deal with Finnish text inputs 
+What this does
 
-Now we use reserve and is adjustable, starting the test with 1 million
+Skips digits (0–9) entirely, so you never accumulate numbers.
+
+Keeps UTF-8 bytes (uch ≥ 0x80), so Finnish letters stay inside words.
+
+Allows - inside words, so hyphenated terms stay one token.
+
+Splits on everything else (spaces, , . ; :, digits).
 */
 
 // src/main.cpp
@@ -17,11 +22,12 @@ Now we use reserve and is adjustable, starting the test with 1 million
 #include <mutex>
 #include <functional>  // for std::hash
 #include <algorithm>   // for std::min, std::sort
-#include <cctype>      // for std::isalnum, std::tolower
+#include <cctype>      // for std::isalpha, std::tolower
 #include <chrono>      // for timing
 
 // ————————————————————————————————————————————————————————
 // 1. Map phase: count words in [startLine, endLine)
+//    now skips digits, keeps Finnish letters and hyphens
 // ————————————————————————————————————————————————————————
 void countWordsInChunk(
     const std::vector<std::string>& allLines,
@@ -29,26 +35,24 @@ void countWordsInChunk(
     std::size_t endLine,
     std::unordered_map<std::string, std::size_t>& localCounts)
 {
-    // Go through each line in our chunk
     for (std::size_t i = startLine; i < endLine; ++i) {
         const std::string& line = allLines[i];
         std::string word;
-
-        // Build words character by character
         for (char ch : line) {
-            if (std::isalnum(static_cast<unsigned char>(ch))) {
-                // Add letter/digit to current word (lowercased)
-                word += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            unsigned char uch = static_cast<unsigned char>(ch);
+            if (uch >= 0x80            // any non‐ASCII byte (Finnish letters in UTF-8)
+                || std::isalpha(uch)   // ASCII letters only (no digits)
+                || ch == '-'           // keep hyphens inside words
+            ) {
+                word += ch;
             }
             else if (!word.empty()) {
-                // Non‐alnum ends a word: count it, then clear
-                localCounts[word] += 1;
+                localCounts[word]++;
                 word.clear();
             }
         }
-        // Last word on the line (if any)
         if (!word.empty()) {
-            localCounts[word] += 1;
+            localCounts[word]++;
         }
     }
 }
@@ -59,9 +63,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // decide number of threads for both map and merge
+    // decide number of threads for map + merge
     unsigned int threadCount = std::thread::hardware_concurrency();
     if (threadCount == 0) threadCount = 1;
+
     // start total timer
     auto totalStart = std::chrono::high_resolution_clock::now();
     // start map timer
@@ -70,33 +75,29 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
-    const size_t BATCH_SIZE = 10000;                // tune down to avoid OOM
+    const size_t BATCH_SIZE = 10000;  // lines per batch
     std::ifstream inputFile(argv[1]);
     if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
         return 1;
     }
 
-    std::vector<std::string> batch;
-    batch.reserve(BATCH_SIZE);
-    std::string line;
-
-    // prepare per-thread local maps
+    // prepare per-thread local maps and reserve
     std::vector<std::unordered_map<std::string, std::size_t>> perThreadCounts(threadCount);
-    // reserve some space to reduce rehashing
-    for (auto& m : perThreadCounts) m.reserve(BATCH_SIZE / 10);
+    for (auto& m : perThreadCounts)
+        m.reserve(BATCH_SIZE / 10);
 
     // prepare globalCounts + merge infrastructure
     std::unordered_map<std::string, std::size_t> globalCounts;
-    globalCounts.reserve(1'000'000);               // estimate unique words
+    globalCounts.reserve(1'000'000);  // estimate unique words
     unsigned int stripeCount = threadCount;
     std::vector<std::mutex> stripeLocks(stripeCount);
 
-    // worker lambda does the merging
+    // merge worker for parallel merge into globalCounts
     auto mergeWorker = [&](unsigned int workerId) {
         for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
             if (i % threadCount != workerId) continue;
-            for (const auto& kv : perThreadCounts[i]) {
+            for (auto const& kv : perThreadCounts[i]) {
                 std::size_t h = std::hash<std::string>{}(kv.first);
                 unsigned int idx = h % stripeCount;
                 std::lock_guard<std::mutex> guard(stripeLocks[idx]);
@@ -105,22 +106,24 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    std::vector<std::string> batch;
+    batch.reserve(BATCH_SIZE);
+    std::string line;
+    std::vector<std::thread> mapWorkers;
+
+    // streaming batches
     while (std::getline(inputFile, line)) {
         batch.push_back(std::move(line));
         if (batch.size() == BATCH_SIZE) {
-            // 1. Spawn map threads on this batch
-            std::size_t totalLines     = batch.size();
+            // Map phase on this batch
+            std::size_t totalLines = batch.size();
             std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
 
-            // reset per-thread maps
             for (auto& m : perThreadCounts) {
                 m.clear();
                 m.reserve(linesPerThread / 10);
             }
-
-            // launch map threads
-            std::vector<std::thread> mapWorkers;
-            mapWorkers.reserve(threadCount);
+            mapWorkers.clear();
             for (unsigned int t = 0; t < threadCount; ++t) {
                 std::size_t start = t * linesPerThread;
                 std::size_t end   = std::min(start + linesPerThread, totalLines);
@@ -128,35 +131,30 @@ int main(int argc, char* argv[]) {
                 mapWorkers.emplace_back(
                     countWordsInChunk,
                     std::cref(batch),
-                    start,
-                    end,
+                    start, end,
                     std::ref(perThreadCounts[t])
                 );
             }
             for (auto& w : mapWorkers) w.join();
+            batch.clear();
 
-            // 2. Parallel‐merge this batch into globalCounts
+            // Parallel Merge phase for this batch
             std::vector<std::thread> mergeWorkers;
-            mergeWorkers.reserve(threadCount);
             for (unsigned int w = 0; w < threadCount; ++w)
                 mergeWorkers.emplace_back(mergeWorker, w);
             for (auto& w : mergeWorkers) w.join();
-
-            batch.clear();  // free memory before next batch
         }
     }
 
-    // Process any leftover lines
+    // leftover batch
     if (!batch.empty()) {
-        std::size_t totalLines     = batch.size();
+        std::size_t totalLines = batch.size();
         std::size_t linesPerThread = (totalLines + threadCount - 1) / threadCount;
-
         for (auto& m : perThreadCounts) {
             m.clear();
             m.reserve(linesPerThread / 10);
         }
-        std::vector<std::thread> mapWorkers;
-        mapWorkers.reserve(threadCount);
+        mapWorkers.clear();
         for (unsigned int t = 0; t < threadCount; ++t) {
             std::size_t start = t * linesPerThread;
             std::size_t end   = std::min(start + linesPerThread, totalLines);
@@ -164,15 +162,13 @@ int main(int argc, char* argv[]) {
             mapWorkers.emplace_back(
                 countWordsInChunk,
                 std::cref(batch),
-                start,
-                end,
+                start, end,
                 std::ref(perThreadCounts[t])
             );
         }
         for (auto& w : mapWorkers) w.join();
 
         std::vector<std::thread> mergeWorkers;
-        mergeWorkers.reserve(threadCount);
         for (unsigned int w = 0; w < threadCount; ++w)
             mergeWorkers.emplace_back(mergeWorker, w);
         for (auto& w : mergeWorkers) w.join();
@@ -183,11 +179,11 @@ int main(int argc, char* argv[]) {
     auto mapEnd = std::chrono::high_resolution_clock::now();
 
     // ————————————————————————————————————————————————————————
-    // 6. Sort alphabetically and print results
+    // 6. Sort alphabetically and write final output
     // ————————————————————————————————————————————————————————
     std::vector<std::pair<std::string, std::size_t>> sortedWords;
     sortedWords.reserve(globalCounts.size());
-    for (const auto& kv : globalCounts)
+    for (auto const& kv : globalCounts)
         sortedWords.emplace_back(kv.first, kv.second);
     std::sort(sortedWords.begin(), sortedWords.end(),
         [](auto const& a, auto const& b){ return a.first < b.first; });
@@ -203,16 +199,14 @@ int main(int argc, char* argv[]) {
     outputFile.close();
 
     // ————————————————————————————————————————————————————————
-    // 7. Report timings in microseconds
+    // 7. Report timings
     // ————————————————————————————————————————————————————————
     auto totalEnd = std::chrono::high_resolution_clock::now();
-    auto mapUs    = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd   - mapStart).count();
-    auto mergeUs  = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - mapStart).count(); // merge included
-    auto totUs    = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
+    auto mapUs = std::chrono::duration_cast<std::chrono::microseconds>(mapEnd - mapStart).count();
+    auto totUs = std::chrono::duration_cast<std::chrono::microseconds>(totalEnd - totalStart).count();
 
     std::cout << "\n--- Timing (µs) ---\n"
               << "Map:   " << mapUs   << "\n"
-              << "Merge: " << mergeUs << "\n"
               << "Total: " << totUs   << "\n";
 
     return 0;
