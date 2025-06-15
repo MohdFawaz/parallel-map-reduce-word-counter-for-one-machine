@@ -87,7 +87,7 @@ million lines and 700 million characters.
 
 
 ![Total Time vs Num of Cores]([https://example.com/image.png](https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine/blob/main/images/total-a1.png))
-![Map Phase Time vs Num of Cores]([https://example.com/image.png](https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine/blob/main/images/map-time-a1.png))
+![Map Phase Time vs Num of Cores](images/map-time-a1.png)
 
 
 Not very important, but that was the table with single-threaded sorting algorithm for the output 
