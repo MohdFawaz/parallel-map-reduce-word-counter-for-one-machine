@@ -1,0 +1,3 @@
+/Users/noranusairat/Downloads/Mohammad/PP25/final-project/build/CMakeFiles/wordcount.dir
+/Users/noranusairat/Downloads/Mohammad/PP25/final-project/build/CMakeFiles/edit_cache.dir
+/Users/noranusairat/Downloads/Mohammad/PP25/final-project/build/CMakeFiles/rebuild_cache.dir
