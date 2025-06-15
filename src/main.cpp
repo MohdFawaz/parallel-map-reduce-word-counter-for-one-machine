@@ -1,6 +1,5 @@
-//This code implements corrected mutexed prints so they show up in the right order and format
-//reserve size was changed and it fixed the issue, I changed it from 1 million to 4 million
-
+//adding a single threaded sorted output saved in output2.txt from higher to lower value
+//This is the code that we performed the initial testing on
 
 // src/main.cpp
 
@@ -69,7 +68,10 @@ int main(int argc, char* argv[]) {
 
     // decide number of threads for map + merge
     unsigned int threadCount = std::thread::hardware_concurrency();
-    // unsigned int threadCount = 4;
+    //unsigned int threadCount = 4;
+
+    std::cout << "Number of cores/threads " << threadCount << "\n";
+
     if (threadCount == 0) threadCount = 1;
 
     // start total timer
@@ -80,7 +82,7 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
-    const size_t BATCH_SIZE = 100000;  // lines per batch
+    const size_t BATCH_SIZE = 2000000;  // lines per batch
     std::ifstream inputFile(argv[1]);
     if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
@@ -208,6 +210,33 @@ int main(int argc, char* argv[]) {
     for (auto const& p : sortedWords)
         outputFile << p.first << " -> " << p.second << "\n";
     outputFile.close();
+
+
+    // ————————————————————————————————————————————————————————
+// Write counts sorted by descending frequency
+// ————————————————————————————————————————————————————————
+std::ofstream output2("output2.txt");
+if (!output2) {
+    std::cerr << "Error: could not open output2.txt for writing\n";
+    return 1;
+}
+
+// copy sortedWords and sort by count (high→low)
+auto freqSorted = sortedWords;
+std::sort(
+    freqSorted.begin(),
+    freqSorted.end(),
+    [](auto const& a, auto const& b){
+        return a.second > b.second;
+    }
+);
+
+output2 << "=== Final Word Counts (High → Low) ===\n";
+for (auto const& p : freqSorted) {
+    output2 << p.first << " -> " << p.second << "\n";
+}
+output2.close();
+
 
     // ————————————————————————————————————————————————————————
     // 7. Report timings
