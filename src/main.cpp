@@ -1,5 +1,5 @@
-//adding a single threaded sorted output saved in output2.txt from higher to lower value
-//This is the code that we performed the initial testing on
+//Implementing parallel merge-sort (divide and conquer) used in the Sorting stage to order the final word-count list from high to low, the output is saved in output2.txt
+//This is the code that we performed our 2nd and final testing on
 
 // src/main.cpp
 
@@ -15,7 +15,25 @@
 #include <cctype>      // for std::isalpha, std::tolower
 #include <chrono>      // for timing
 //#include <locale>      // for Unicode locale support delete
+#include <iterator>    
+
+
 static std::mutex ioMutex;  
+
+//Multi-threaded merge sort implementation
+template<typename It, typename Cmp>
+void parallelMergeSort(It first, It last, Cmp comp, unsigned depth = 0) {
+    auto n = std::distance(first, last);
+    if (n < 10000 || depth > std::thread::hardware_concurrency()) {
+        std::sort(first, last, comp);
+        return;
+    }
+    It mid = first + n/2;
+    std::thread t(parallelMergeSort<It,Cmp>, first, mid, comp, depth+1);
+    parallelMergeSort(mid, last, comp, depth+1);
+    t.join();
+    std::inplace_merge(first, mid, last, comp);
+}
 
 // ————————————————————————————————————————————————————————
 // 1. Map phase: count words in [startLine, endLine)
@@ -198,8 +216,12 @@ int main(int argc, char* argv[]) {
     sortedWords.reserve(globalCounts.size());
     for (auto const& kv : globalCounts)
         sortedWords.emplace_back(kv.first, kv.second);
-    std::sort(sortedWords.begin(), sortedWords.end(),
-        [](auto const& a, auto const& b){ return a.first < b.first; });
+    // std::sort(sortedWords.begin(), sortedWords.end(),
+    //     [](auto const& a, auto const& b){ return a.first < b.first; });
+    parallelMergeSort(
+        sortedWords.begin(), sortedWords.end(),
+        [](auto const& a, auto const& b){ return a.first < b.first; }
+    );
 
     std::ofstream outputFile("output.txt");
     if (!outputFile) {
@@ -223,13 +245,19 @@ if (!output2) {
 
 // copy sortedWords and sort by count (high→low)
 auto freqSorted = sortedWords;
-std::sort(
-    freqSorted.begin(),
-    freqSorted.end(),
-    [](auto const& a, auto const& b){
-        return a.second > b.second;
-    }
+// std::sort(
+//     freqSorted.begin(),
+//     freqSorted.end(),
+//     [](auto const& a, auto const& b){
+//         return a.second > b.second;
+//     }
+// );
+parallelMergeSort(
+    freqSorted.begin(), freqSorted.end(),
+    [](auto const& a, auto const& b){ return a.second > b.second; }
 );
+
+
 
 output2 << "=== Final Word Counts (High → Low) ===\n";
 for (auto const& p : freqSorted) {
