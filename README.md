@@ -75,7 +75,7 @@ million lines and 700 million characters.
 
 ## Performance Results
 
-### After Merge & Parallel Sort
+### After implementing the parallel Sort Algorithm
 | Cores | 500 k Total (µs) | Speedup      | 1 M Total (µs) | Speedup      | 2 M Total (µs) | Speedup      |
 |:-----:|------------------:|:-------------|---------------:|:-------------|---------------:|:-------------|
 | 1     |      62,717,443   | 1.00× ( 0% )  |     62,080,693  | 1.00× ( 0% ) |     63,649,276  | 1.00× ( 0% )  |
@@ -90,8 +90,8 @@ Note in y-axis that you should multiply the value x10 to get it in seconds, so i
 ![Map Phase Time vs Num of Cores](images/map-time-a1.png)
 
 
-Not very important, but that was the table with single-threaded sorting algorithm for the output 
-### Before Merge & Sort (baseline)
+##Not very important, but that was the table with single-threaded sorting algorithm for the output 
+### using single-threaded Sort (baseline)
 | Cores | 500 k Total (µs) | Speedup      | 1 M Total (µs) | Speedup      | 2 M Total (µs) | Speedup      |
 |:-----:|------------------:|:-------------|---------------:|:-------------|---------------:|:-------------|
 | 1     |      66,076,306   | 1.00× ( 0% )  |     65,104,255  | 1.00× ( 0% ) |     66,616,403  | 1.00× ( 0% )  |
@@ -100,6 +100,8 @@ Not very important, but that was the table with single-threaded sorting algorith
 | 4     |      43,129,485   | 1.53× (35%)  |     42,516,748  | 1.53× (35%)  |     41,462,567  | 1.61× (38%)  |
 | 8     |      40,913,860   | 1.62× (38%)  |     40,250,688  | 1.62× (38%)  |     38,832,172  | 1.72× (42%)  |
 
+![Total Time vs Num of Cores](images/output-before-parallel-sort.png)
+![Map Phase Time vs Num of Cores](images/map-output-before-parallel-sort.png)
 
 
 ## Performance Analysis
