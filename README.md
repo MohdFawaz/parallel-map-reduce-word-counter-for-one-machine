@@ -1,3 +1,6 @@
+#Kindly refer to the presentation for more details on the output and implementations, you can watch the demo of running code and showing parallelism there
+
+
 # Parallel Map-Reduce Word Counter for One Machine
 
 
@@ -19,8 +22,8 @@ A lightweight C++17 application that reads a large UTF-8 text file in fixed-size
 ## 🛠️ Building
 
 bash
-git clone <your-repo-url>
-cd <https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine.git>
+git clone <https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine.git>
+cd project_directory
 mkdir build && cd build
 cmake ..
 make
