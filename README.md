@@ -1,4 +1,4 @@
-#Kindly refer to the presentation for more details on the output and implementations, you can watch the demo of running code and showing parallelism there
+# Kindly refer to the presentation for more details on the output and implementations, you can watch the demo of running code and showing parallelism there
 
 
 # Parallel Map-Reduce Word Counter for One Machine
@@ -93,7 +93,7 @@ Note in y-axis that you should multiply the value x10 to get it in seconds, so i
 ![Map Phase Time vs Num of Cores](images/map-time-a1.png)
 
 
-##Not very important, but that was the table with single-threaded sorting algorithm for the output 
+## Not very important, but that was the table with single-threaded sorting algorithm for the output 
 ### using single-threaded Sort (baseline)
 | Cores | 500 k Total (µs) | Speedup      | 1 M Total (µs) | Speedup      | 2 M Total (µs) | Speedup      |
 |:-----:|------------------:|:-------------|---------------:|:-------------|---------------:|:-------------|
