@@ -1,6 +1,6 @@
-/*
-Further Finnish text processing : only letters (ASCII or Finnish), no hyphens, and no whitespace
-*/
+//Fixing reading Finnish words correctly, ignoring '-' and ',' and other special characters, ignoring counting spaces, dealing with Finnish words starting with a - or attached to numbers. 
+
+//adding printing for threads in different stages for tracking.
 
 
 // src/main.cpp
@@ -16,6 +16,8 @@ Further Finnish text processing : only letters (ASCII or Finnish), no hyphens, a
 #include <algorithm>   // for std::min, std::sort
 #include <cctype>      // for std::isalpha, std::tolower
 #include <chrono>      // for timing
+//#include <locale>      // for Unicode locale support delete
+
 
 // ————————————————————————————————————————————————————————
 // 1. Map phase: count words in [startLine, endLine)
@@ -27,6 +29,10 @@ void countWordsInChunk(
     std::size_t endLine,
     std::unordered_map<std::string, std::size_t>& localCounts)
 {
+    auto tid = std::this_thread::get_id();
+    std::cout << "[Map] thread " << tid
+          << " handling lines " << startLine
+          << "–" << endLine << "\n";
     for (std::size_t i = startLine; i < endLine; ++i) {
         const std::string& line = allLines[i];
         std::string word;
@@ -34,7 +40,7 @@ void countWordsInChunk(
             unsigned char uch = static_cast<unsigned char>(ch);
             if ((std::isalpha(uch) || uch >= 0x80)  // only letters (ASCII or Finnish)
                 && ch != '-'                        // no hyphens
-                //&& uch != 0xA0                       // no NBSP
+               // && uch != 0xA0                       // no NBSP     //delete
                 && !std::isspace(uch)               // no spaces
             ) {
                 word += ch;
@@ -56,6 +62,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // enable Unicode-aware classification (e.g. NBSP as space)
+    //std::locale::global(std::locale(""));                       //delete
+
     // decide number of threads for map + merge
     unsigned int threadCount = std::thread::hardware_concurrency();
     if (threadCount == 0) threadCount = 1;
@@ -68,7 +77,7 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
-    const size_t BATCH_SIZE = 10000;  // lines per batch
+    const size_t BATCH_SIZE = 1000;  // lines per batch
     std::ifstream inputFile(argv[1]);
     if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
@@ -88,6 +97,10 @@ int main(int argc, char* argv[]) {
 
     // merge worker for parallel merge into globalCounts
     auto mergeWorker = [&](unsigned int workerId) {
+        auto tid = std::this_thread::get_id();
+        std::cout << "[Merge] worker " << workerId
+                  << " (thread " << tid << ") starting\n";
+
         for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
             if (i % threadCount != workerId) continue;
             for (auto const& kv : perThreadCounts[i]) {
