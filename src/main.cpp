@@ -1,6 +1,5 @@
-//Fixing reading Finnish words correctly, ignoring '-' and ',' and other special characters, ignoring counting spaces, dealing with Finnish words starting with a - or attached to numbers. 
-
-//adding printing for threads in different stages for tracking.
+//This code implements corrected mutexed prints so they show up in the right order and format
+//reserve size was changed and it fixed the issue, I changed it from 1 million to 4 million
 
 
 // src/main.cpp
@@ -17,7 +16,7 @@
 #include <cctype>      // for std::isalpha, std::tolower
 #include <chrono>      // for timing
 //#include <locale>      // for Unicode locale support delete
-
+static std::mutex ioMutex;  
 
 // ————————————————————————————————————————————————————————
 // 1. Map phase: count words in [startLine, endLine)
@@ -29,10 +28,13 @@ void countWordsInChunk(
     std::size_t endLine,
     std::unordered_map<std::string, std::size_t>& localCounts)
 {
+    {
+    std::lock_guard<std::mutex> lg(ioMutex);
     auto tid = std::this_thread::get_id();
     std::cout << "[Map] thread " << tid
           << " handling lines " << startLine
           << "–" << endLine << "\n";
+    }
     for (std::size_t i = startLine; i < endLine; ++i) {
         const std::string& line = allLines[i];
         std::string word;
@@ -67,6 +69,7 @@ int main(int argc, char* argv[]) {
 
     // decide number of threads for map + merge
     unsigned int threadCount = std::thread::hardware_concurrency();
+    // unsigned int threadCount = 4;
     if (threadCount == 0) threadCount = 1;
 
     // start total timer
@@ -77,7 +80,7 @@ int main(int argc, char* argv[]) {
     // ————————————————————————————————————————————————————————
     // Read & process file in batches of BATCH_SIZE lines
     // ————————————————————————————————————————————————————————
-    const size_t BATCH_SIZE = 1000;  // lines per batch
+    const size_t BATCH_SIZE = 100000;  // lines per batch
     std::ifstream inputFile(argv[1]);
     if (!inputFile) {
         std::cerr << "Error opening file: " << argv[1] << "\n";
@@ -91,16 +94,18 @@ int main(int argc, char* argv[]) {
 
     // prepare globalCounts + merge infrastructure
     std::unordered_map<std::string, std::size_t> globalCounts;
-    globalCounts.reserve(1'000'000);  // estimate unique words
+    globalCounts.reserve(4'000'000);  // estimate unique words
     unsigned int stripeCount = threadCount;
     std::vector<std::mutex> stripeLocks(stripeCount);
 
     // merge worker for parallel merge into globalCounts
     auto mergeWorker = [&](unsigned int workerId) {
+        {
+        std::lock_guard<std::mutex> lg(ioMutex);
         auto tid = std::this_thread::get_id();
         std::cout << "[Merge] worker " << workerId
                   << " (thread " << tid << ") starting\n";
-
+        }
         for (unsigned int i = 0; i < perThreadCounts.size(); ++i) {
             if (i % threadCount != workerId) continue;
             for (auto const& kv : perThreadCounts[i]) {
