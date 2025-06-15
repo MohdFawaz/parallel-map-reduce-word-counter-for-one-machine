@@ -86,7 +86,7 @@ million lines and 700 million characters.
 
 
 
-![Total Time vs Num of Cores]([https://example.com/image.png](https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine/blob/main/images/total-a1.png))
+![Total Time vs Num of Cores](images/total-a1.png)
 ![Map Phase Time vs Num of Cores](images/map-time-a1.png)
 
 
