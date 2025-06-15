@@ -85,7 +85,7 @@ million lines and 700 million characters.
 | 8     |      37,212,383   | 1.68× (41%)  |     36,637,550  | 1.69× (41%)  |     35,646,053  | 1.79× (44%)  |
 
 
-
+Note in y-axis that you should multiply the value x10 to get it in seconds, so if you see for example 5.5, it means 5.5 x 10 = 55 secs.
 ![Total Time vs Num of Cores](images/total-a1.png)
 ![Map Phase Time vs Num of Cores](images/map-time-a1.png)
 
