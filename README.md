@@ -88,6 +88,28 @@ In case you couldn't download it from the previous link, try here: https://drive
    - Print thread assignments and timing to the console  
 
 
+## Parallelism Utilization
+
+We leverage all available CPU threads in each major stage:
+
+1. **Map Phase**  
+   - Query `N = std::thread::hardware_concurrency()`  
+   - Spawn N threads, each counting words in its own slice of the batch  
+   - All threads run concurrently until every line is processed  
+
+2. **Merge Phase**  
+   - Re-use `N` threads to combine per-thread maps into `globalCounts`  
+   - Each thread handles a disjoint subset of maps (by `i % N == threadId`)  
+   - Striped locking (`hash(word)%N`) lets most threads update in parallel  
+
+3. **Sort Phase**  
+   - `parallelMergeSort` splits the vector in two, spawning one extra thread per split  
+   - Recurses until subranges are small or depth > N, then falls back to `std::sort`  
+   - Ensures up to N threads are sorting different parts simultaneously  
+
+By matching thread-count to hardware cores in each phase, we keep all cores busy and minimize idle time.  
+
+
 
 ## Performance Results
 
