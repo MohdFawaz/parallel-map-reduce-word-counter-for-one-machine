@@ -1,4 +1,4 @@
-## Kindly refer to the presentation for more details on the output and implementations, you can watch the demo of running code and showing parallelism there
+## Kindly refer to the presentation for the demo. 
 
 
 # Parallel Map-Reduce Word Counter for One Machine
