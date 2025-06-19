@@ -167,6 +167,15 @@ Note in y-axis that you should multiply the value x10 to get it in seconds, so i
 - **Parallel Sort**  
   - Spawns threads and merges subranges; overhead grows with more threads and smaller subarrays.
 
+### results comparison
+- the file output2.txt which contains the words ordered from highest to the lowest count was compared to the output of the AWS map reduce code that we implemented in the cloud computing course and I got grade 5.
+- the only difference is that our output file is so far case-sensitive, but in the AWS the code was not case-sensitive, but if we conbime the same words which starts with capital and small characters we get approximately the same count, check "Han in the below image for example". 
+- More optimization and text processing is needed (more special characters connected to words and other situations)
+- The file output1.txt contains words count in the alphabetical order.
+
+![Output Comparisons(images/output_comparison.png)
+  
+
 ### Takeaways
 - **Sweet spot at 4–6 threads** for most batch sizes: best cost-to-performance tradeoff.  
 - **Beyond 6 threads** adds minimal benefit; may even slightly slow down due to synchronization and cache contention.  
