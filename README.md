@@ -36,7 +36,8 @@ make
 The input of the programs is the fiwiki-latest-pages-articles_preprocessed.txt file containing
 some content of Finnish pages from Wikipedia. The file size is about 700MB, contains about 7
 million lines and 700 million characters.
-
+Link: https://abofi-my.sharepoint.com/:f:/g/personal/adnan_ashraf_abo_fi/En1SINSJddFOhz_WuEYV-ZoBHK7Ju7X24eN_mOf9rZN9Hg?e=Cjngg0 
+Note: People in Åbo Akademi O365 with the link can view and download the above datasets.
 
 ## How It Works
 
