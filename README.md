@@ -107,8 +107,11 @@ We leverage all available CPU threads in each major stage:
    - Recurses until subranges are small or depth > N, then falls back to `std::sort`  
    - Ensures up to N threads are sorting different parts simultaneously  
 
-By matching thread-count to hardware cores in each phase, we keep all cores busy and minimize idle time.  
+By matching thread-count to hardware cores in each phase, we keep all cores busy and minimize idle time as shown here: 
 
+
+![Parallelism_1](images/terminal_output1.png)
+![Parallelism_2](images/terminal_output2.png)
 
 
 ## Performance Results
