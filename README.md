@@ -173,7 +173,7 @@ Note in y-axis that you should multiply the value x10 to get it in seconds, so i
 - More optimization and text processing is needed (more special characters connected to words and other situations)
 - The file output1.txt contains words count in the alphabetical order.
 
-![Output Comparisons(images/output_comparison.png)
+![Output Comparisons](images/output_comparison.png)
   
 
 ### Takeaways
