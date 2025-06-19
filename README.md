@@ -39,6 +39,8 @@ million lines and 700 million characters.
 Link: https://abofi-my.sharepoint.com/:f:/g/personal/adnan_ashraf_abo_fi/En1SINSJddFOhz_WuEYV-ZoBHK7Ju7X24eN_mOf9rZN9Hg?e=Cjngg0 
 Note: People in Åbo Akademi O365 with the link can view and download the above datasets.
 
+In case you couldn't download it from the previous link, try here: https://drive.google.com/drive/folders/1EQI671TRsXpCYQfEBIQggS99YbOG16Wr?usp=sharing
+
 ## How It Works
 
 1. **Configuration**  
