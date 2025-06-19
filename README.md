@@ -47,19 +47,20 @@ In case you couldn't download it from the previous link, try here: https://drive
    - Setting `threadCount`: number of threads used for both map and merge phases via std::thread::hardware_concurrency() or manually.
    - `BATCH_SIZE`: number of lines read into memory at once  
 
-2. **Batch Reading**  
+2. **Batch Reading**
+   - When reading large files at once, a segmentation error false as there could be no enough space in memory, thus we divide our file into batch, each batch has a specific number of lines that is defined in code.  
    - Read lines into a `batch` vector until its size reaches `BATCH_SIZE`  
    - Pause reading and process the full batch before continuing (we selected the size of 2 million lines)
         As soon as batch.size() == BATCH_SIZE, pause reading and process this chunk
      
-3. **Map Phase**  
+4. **Map Phase**  
    - Split each batch evenly across N “map” threads  
    - Each thread runs `countWordsInChunk()`:
      - Scans characters in its line range  
      - Builds words from letters only (ASCII + Finnish), skipping digits, hyphens, spaces  
      - Updates a **local** `unordered_map<string, size_t>` with word counts  
 
-4. **Merge Phase (Shuffle + Reduce)**  
+5. **Merge Phase (Shuffle + Reduce)**  
    - Spawn N “merge” threads  
    - Each thread takes a subset of the local maps (round-robin by map index)  
    - For each `(word, count)`:
@@ -67,13 +68,14 @@ In case you couldn't download it from the previous link, try here: https://drive
      2. Lock only that stripe’s mutex  
      3. Add the count into the shared `globalCounts` map  
 
-5. **Sorting**  
+6. **Sorting**
+   - After all batches are processed (the whole file is processed) then we proceed with this step
    - Collect all `(word, count)` entries from `globalCounts` into a `vector<pair<string,size_t>>`  
    - Run a parallel merge-sort twice:
      - First by word (A → Z) → write **output.txt**  
      - Then by count descending → write **output2.txt**  
 
-6. **Timing & Logging**  
+8. **Timing & Logging**  
    - Measure map-phase and total runtime (map + merge + sort) in microseconds  
    - Print thread assignments and timing to the console  
 
