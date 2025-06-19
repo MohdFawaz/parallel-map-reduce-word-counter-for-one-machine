@@ -21,13 +21,13 @@ A lightweight C++17 application that reads a large UTF-8 text file in fixed-size
 
 ## 🛠️ Building
 
-bash
+```bash
 git clone <https://github.com/MohdFawaz/parallel-map-reduce-word-counter-for-one-machine.git>
 cd project_directory
 mkdir build && cd build
 cmake ..
 make
-
+```
 ## Usage
 ./wordcount path/to/input.txt
 
